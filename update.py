@@ -14,7 +14,8 @@ ASSETS = [
     "ONDO", "POL", "RENDER", "SOL", "SUI", "TAO", "TIA", "UNI", "VVV", "XRP",
 ]
 TIMEFRAMES = {"1h": 3600, "1d": 86400}
-HISTORY_START = datetime(2023, 1, 1, tzinfo=timezone.utc)
+# Daily candles go back further so slow filters (e.g. a 200-day average) are warmed up by 2023.
+HISTORY_START = {"1h": datetime(2023, 1, 1, tzinfo=timezone.utc), "1d": datetime(2021, 1, 1, tzinfo=timezone.utc)}
 MAX_CANDLES_PER_REQUEST = 300
 HEADER = ["timestamp", "open", "high", "low", "close", "volume"]
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -73,7 +74,7 @@ def update_series(asset, timeframe, granularity, data_dir):
     path = data_dir / timeframe / f"{asset}_USD_{timeframe}_full.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = read_rows(path)
-    history_start = int(HISTORY_START.timestamp())
+    history_start = int(HISTORY_START[timeframe].timestamp())
     # Stop before the in-progress candle so every stored row is final.
     end = int(time.time()) // granularity * granularity
 
