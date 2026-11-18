@@ -1,6 +1,6 @@
 # backtesting-data-flake
 
-Hourly and daily Coinbase OHLCV candles (from 2025-02-01) for
+Hourly and daily Coinbase OHLCV candles (from 2023-01-01, or each asset's Coinbase listing if later) for
 [trading-bot-flake](https://github.com/Sammyalhashe/trading-bot-flake) backtests.
 
 ```

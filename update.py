@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Append completed Coinbase candles to data/<timeframe>/<SYM>_USD_<timeframe>_full.csv."""
+"""Keep data/<timeframe>/<SYM>_USD_<timeframe>_full.csv complete from HISTORY_START to the last closed candle."""
 import argparse
 import csv
 import json
@@ -14,7 +14,7 @@ ASSETS = [
     "ONDO", "POL", "RENDER", "SOL", "SUI", "TAO", "TIA", "UNI", "VVV", "XRP",
 ]
 TIMEFRAMES = {"1h": 3600, "1d": 86400}
-HISTORY_START = datetime(2025, 2, 1, tzinfo=timezone.utc)
+HISTORY_START = datetime(2023, 1, 1, tzinfo=timezone.utc)
 MAX_CANDLES_PER_REQUEST = 300
 HEADER = ["timestamp", "open", "high", "low", "close", "volume"]
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -39,47 +39,62 @@ def fetch_candles(product_id, start_ts, end_ts, granularity):
     raise RuntimeError(f"giving up on {product_id} {start_ts}-{end_ts}")
 
 
-def last_timestamp(path):
+def parse_timestamp(text):
+    return int(datetime.strptime(text, TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc).timestamp())
+
+
+def format_row(ts, values):
+    return [datetime.fromtimestamp(ts, timezone.utc).strftime(TIMESTAMP_FORMAT), *values]
+
+
+def read_rows(path):
     if not path.exists():
-        return None
+        return []
     with path.open() as f:
-        rows = list(csv.reader(f))
-    if len(rows) < 2:
-        return None
-    parsed = datetime.strptime(rows[-1][0], TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
-    return int(parsed.timestamp())
+        return list(csv.reader(f))[1:]
 
 
-def update_series(asset, timeframe, granularity, data_dir):
-    path = data_dir / timeframe / f"{asset}_USD_{timeframe}_full.csv"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    last = last_timestamp(path)
-    start = last + granularity if last is not None else int(HISTORY_START.timestamp())
-    # Stop before the in-progress candle so every stored row is final.
-    end = int(time.time()) // granularity * granularity
-
-    new_rows = {}
+def fetch_range(asset, start, end, granularity):
+    rows = {}
     window_start = start
     while window_start < end:
         window_end = min(window_start + MAX_CANDLES_PER_REQUEST * granularity, end)
         for ts, low, high, open_, close, volume in fetch_candles(
                 f"{asset}-USD", window_start, window_end, granularity):
             if start <= ts < end:
-                new_rows[ts] = [open_, high, low, close, volume]
+                rows[ts] = [open_, high, low, close, volume]
         window_start = window_end
         time.sleep(0.35)
+    return rows
 
-    if not new_rows:
-        return 0
-    write_header = last is None
-    with path.open("a", newline="") as f:
-        writer = csv.writer(f)
-        if write_header:
+
+def update_series(asset, timeframe, granularity, data_dir):
+    """Prepend history back to HISTORY_START if missing, then append closed candles. Returns rows added."""
+    path = data_dir / timeframe / f"{asset}_USD_{timeframe}_full.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = read_rows(path)
+    history_start = int(HISTORY_START.timestamp())
+    # Stop before the in-progress candle so every stored row is final.
+    end = int(time.time()) // granularity * granularity
+
+    if not existing:
+        older, first, last = fetch_range(asset, history_start, end, granularity), None, None
+    else:
+        first, last = parse_timestamp(existing[0][0]), parse_timestamp(existing[-1][0])
+        older = fetch_range(asset, history_start, first, granularity) if first > history_start else {}
+    newer = fetch_range(asset, last + granularity, end, granularity) if last is not None else {}
+
+    if older or not existing:
+        with path.open("w", newline="") as f:
+            writer = csv.writer(f)
             writer.writerow(HEADER)
-        for ts in sorted(new_rows):
-            stamp = datetime.fromtimestamp(ts, timezone.utc).strftime(TIMESTAMP_FORMAT)
-            writer.writerow([stamp, *new_rows[ts]])
-    return len(new_rows)
+            writer.writerows(format_row(ts, older[ts]) for ts in sorted(older))
+            writer.writerows(existing)
+            writer.writerows(format_row(ts, newer[ts]) for ts in sorted(newer))
+    elif newer:
+        with path.open("a", newline="") as f:
+            csv.writer(f).writerows(format_row(ts, newer[ts]) for ts in sorted(newer))
+    return len(older) + len(newer)
 
 
 def main():
